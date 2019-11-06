@@ -830,7 +830,8 @@ LOCAL void *moloch_packet_thread(void *threadp)
 
         MOLOCH_LOCK(packetQ[thread].lock);
         inProgress[thread] = 0;
-        if (DLL_COUNT(packet_, &packetQ[thread]) == 0) {
+        // Reading Nfdump generates no packgets, but only commands, so don't sleep on waiting packets
+        if (DLL_COUNT(packet_, &packetQ[thread]) == 0 && !config.readNfdump) {
             struct timespec ts;
             clock_gettime(CLOCK_REALTIME_COARSE, &ts);
             ts.tv_sec++;
@@ -844,8 +845,9 @@ LOCAL void *moloch_packet_thread(void *threadp)
                 lastPacketSecs[thread] = ts.tv_sec - 10;
             }
         }
-        inProgress[thread] = 1;
         DLL_POP_HEAD(packet_, &packetQ[thread], packet);
+        // nfdump does not have packets, but inProgress is counted as queue and forbids shutdown
+        inProgress[thread] = packet ? 1 : 0;
         MOLOCH_UNLOCK(packetQ[thread].lock);
 
         // Only process commands if the packetQ is less then 75% full or every 8 packets
