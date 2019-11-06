@@ -227,6 +227,13 @@ void moloch_session_mark_for_close (MolochSession_t *session, int ses)
         DLL_REMOVE(tcp_, &tcpWriteQ[session->thread], session);
     }
 }
+
+// For immediate closing. Adds the session to closingQ
+void moloch_session_close(MolochSession_t *session) {
+    session->closingQ = 1;
+    DLL_PUSH_TAIL(q_, &closingQ[session->thread], session);
+}
+
 /******************************************************************************/
 LOCAL void moloch_session_free (MolochSession_t *session)
 {
@@ -498,11 +505,11 @@ void moloch_session_process_commands(int thread)
     // Closing Q
     for (count = 0; count < 10; count++) {
         MolochSession_t *session = DLL_PEEK_HEAD(q_, &closingQ[thread]);
+        if (!session)
+           break;
 
-        if (session && session->saveTime < (uint64_t)lastPacketSecs[thread]) {
+        if (config.readNfdump || session->saveTime < (uint64_t)lastPacketSecs[thread]) {
             moloch_session_save(session);
-        } else {
-            break;
         }
     }
 
