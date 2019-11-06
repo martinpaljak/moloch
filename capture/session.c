@@ -227,6 +227,7 @@ void moloch_session_mark_for_close (MolochSession_t *session, int ses)
         DLL_REMOVE(tcp_, &tcpWriteQ[session->thread], session);
     }
 }
+
 /******************************************************************************/
 LOCAL void moloch_session_free (MolochSession_t *session)
 {
@@ -302,6 +303,47 @@ LOCAL void moloch_session_save(MolochSession_t *session)
     moloch_db_save_session(session, TRUE);
     moloch_session_free(session);
 }
+
+// For immediate closing. Adds the session to closingQ
+void moloch_session_close(MolochSession_t *session) {
+    session->closingQ = 1;
+    DLL_PUSH_TAIL(q_, &closingQ[session->thread], session);
+}
+
+// Locates an existing session and upates it
+void moloch_session_update_or_create(MolochSession_t *session) {
+    MolochSession_t *existing;
+    // Update "latest packet" time for thread
+    lastPacketSecs[session->thread] = session->lastPacket.tv_sec;
+
+    // check if we have one existing
+    uint32_t hash = moloch_session_hash(session->sessionId);
+    HASH_FIND_HASH(h_, sessions[session->thread][session->ses], hash, session->sessionId, existing);
+    if (existing) {
+        // should not happen with nfdump
+        if (!existing->closingQ) {
+            DLL_MOVE_TAIL(q_, &sessionsQ[session->thread][session->ses], existing);
+        }
+        // update existing. FIXME: direction is not shown?
+        existing->packets[0] += session->packets[0];
+        existing->bytes[0] += session->bytes[0];
+
+        // discard input session, used only for function passing
+        moloch_session_free(session);
+        // save and close existing session
+        moloch_session_save(existing);
+    } else {
+        // mark saving time
+        session->saveTime = session->firstPacket.tv_sec + config.tcpSaveTimeout;
+        // store
+        HASH_ADD_HASH(h_, sessions[session->thread][session->ses], hash, session->sessionId, session);
+        DLL_PUSH_TAIL(q_, &sessionsQ[session->thread][session->ses], session);
+        // new session for plugins
+        if (pluginsCbs & MOLOCH_PLUGIN_NEW)
+            moloch_plugins_cb_new(session);
+    }
+}
+
 /******************************************************************************/
 void moloch_session_mid_save(MolochSession_t *session, uint32_t tv_sec)
 {
@@ -498,11 +540,11 @@ void moloch_session_process_commands(int thread)
     // Closing Q
     for (count = 0; count < 10; count++) {
         MolochSession_t *session = DLL_PEEK_HEAD(q_, &closingQ[thread]);
+        if (!session)
+           break;
 
-        if (session && session->saveTime < (uint64_t)lastPacketSecs[thread]) {
+        if (config.readNfdump || session->saveTime < (uint64_t)lastPacketSecs[thread]) {
             moloch_session_save(session);
-        } else {
-            break;
         }
     }
 

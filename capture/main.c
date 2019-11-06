@@ -94,6 +94,9 @@ LOCAL  GOptionEntry entries[] =
     { "pcapfile",  'r',                    0, G_OPTION_ARG_FILENAME_ARRAY, &config.pcapReadFiles, "Offline pcap file", NULL },
     { "pcapdir",   'R',                    0, G_OPTION_ARG_FILENAME_ARRAY, &config.pcapReadDirs,  "Offline pcap directory, all *.pcap files will be processed", NULL },
     { "monitor",   'm',                    0, G_OPTION_ARG_NONE,           &config.pcapMonitor,   "Used with -R option monitors the directory for closed files", NULL },
+#ifdef HAVE_NFDUMP
+    { "nfdump",    'N',                    0, G_OPTION_ARG_FILENAME,       &config.readNfdump,    "Read nfdump folder for sessions", NULL },
+#endif
     { "packetcnt",   0,                    0, G_OPTION_ARG_INT,            &config.pktsToRead,    "Number of packets to read from each offline file", NULL},
     { "delete",      0,                    0, G_OPTION_ARG_NONE,           &config.pcapDelete,    "In offline mode delete files once processed, requires --copy", NULL },
     { "skip",      's',                    0, G_OPTION_ARG_NONE,           &config.pcapSkip,      "Used with -R option and without --copy, skip files already processed", NULL },
@@ -805,6 +808,10 @@ int main(int argc, char **argv)
     moloch_plugins_load(config.rootPlugins);
     if (config.pcapReadOffline)
         moloch_readers_set("libpcap-file");
+#ifdef HAVE_NFDUMP
+    else if(config.readNfdump)
+        moloch_readers_set("nfdump");
+#endif
     else
         moloch_readers_set(NULL);
     if (!config.pcapReadOffline) {
