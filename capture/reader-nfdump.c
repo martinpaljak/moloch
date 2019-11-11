@@ -101,6 +101,9 @@ LOCAL MolochSession_t *moloch_session_create() {
     int64_t pos = 0;
     g_array_append_val(session->filePosArray, pos);
 
+    if (config.numPlugins > 0)
+        session->pluginData = MOLOCH_SIZE_ALLOC0(pluginData, sizeof(void *)*config.numPlugins);
+
     return session;
 }
 
