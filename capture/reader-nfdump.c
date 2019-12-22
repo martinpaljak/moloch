@@ -81,12 +81,14 @@ LOCAL gboolean reader_nfdump_next();      // Sets the nffile pointer to next fil
 
 // TODO: add to moloch.h ?
 void moloch_session_close(MolochSession_t *session);
+void moloch_session_update_or_create(MolochSession_t *session);
 
-// Allocate and fill with needed data
+
+// Allocate and fill with minimal needed data
 LOCAL MolochSession_t *moloch_session_create() {
     MolochSession_t *session;
     session = MOLOCH_TYPE_ALLOC0(MolochSession_t);
-    session->stopSaving = 0xffff;
+    session->stopSaving = 0xffff; // We don't count packets, but have it as max
 
     session->filePosArray = g_array_sized_new(FALSE, FALSE, sizeof(uint64_t), 1);
     if (config.enablePacketLen) {
@@ -107,20 +109,24 @@ LOCAL MolochSession_t *moloch_session_create() {
     return session;
 }
 
-// Moves session to closingQ on packet thread.
-LOCAL void reader_nfdump_save_on_packet_thread(MolochSession_t *session, gpointer UNUSED(uw1),
-                                               gpointer UNUSED(uw2)) {
+// Session command: moves session to closingQ on packet thread at once.
+LOCAL void reader_nfdump_save_on_packet_thread(MolochSession_t *session, gpointer UNUSED(uw1), gpointer UNUSED(uw2)) {
     if (pluginsCbs & MOLOCH_PLUGIN_NEW)
         moloch_plugins_cb_new(session);
 
     moloch_session_close(session);
 }
 
+// Session command: handle session on packet thread
+LOCAL void reader_nfdump_update_or_create(MolochSession_t *session, gpointer UNUSED(uw1), gpointer UNUSED(uw2)) {
+    moloch_session_update_or_create(session);
+}
+
 // create a new moloch session based on nfdump data and push it to packet thread for saving.
 LOCAL void import_nfdump_record(master_record_t *r) {
     MolochSession_t *session = moloch_session_create();
     char sessionId[MOLOCH_SESSIONID_LEN];
-
+ 
     // times
     session->firstPacket.tv_sec = r->first;
     session->lastPacket.tv_sec = r->last;
@@ -136,8 +142,7 @@ LOCAL void import_nfdump_record(master_record_t *r) {
         ((uint64_t *)session->addr1.s6_addr)[1] = htonll(r->V6.srcaddr[1]);
         ((uint64_t *)session->addr2.s6_addr)[0] = htonll(r->V6.dstaddr[0]);
         ((uint64_t *)session->addr2.s6_addr)[1] = htonll(r->V6.dstaddr[1]);
-        moloch_session_id6(sessionId, session->addr1.s6_addr, r->srcport, session->addr2.s6_addr,
-                           r->dstport);
+        moloch_session_id6(sessionId, session->addr1.s6_addr, r->srcport, session->addr2.s6_addr, r->dstport);
     } else {
         ((uint32_t *)session->addr1.s6_addr)[2] = htonl(0xffff);
         ((uint32_t *)session->addr1.s6_addr)[3] = htonl(r->V4.srcaddr);
@@ -145,6 +150,7 @@ LOCAL void import_nfdump_record(master_record_t *r) {
         ((uint32_t *)session->addr2.s6_addr)[3] = htonl(r->V4.dstaddr);
         moloch_session_id(sessionId, r->V4.srcaddr, r->srcport, r->V4.dstaddr, r->dstport);
     }
+    // SessionId in full. First byte contains actual length (13 vs 37)
     memcpy(session->sessionId, sessionId, MOLOCH_SESSIONID_LEN);
 
     // These are by direction
@@ -162,10 +168,12 @@ LOCAL void import_nfdump_record(master_record_t *r) {
     // protocol tags and extra tags from command line
     moloch_parsers_initial_tag(session);
 
-    // pushes fresh session pointer to packet thread via command queue; session
-    // will be freed in packet thread
-    moloch_session_add_cmd(session, MOLOCH_SES_CMD_FUNC, NULL, NULL,
-                           reader_nfdump_save_on_packet_thread);
+    // pushes fresh session pointer to packet thread via command queue;
+    // session will be freed in packet thread
+    if (getenv("NFDUMP_MATCH_SESSIONS") != NULL)
+        moloch_session_add_cmd(session, MOLOCH_SES_CMD_FUNC, NULL, NULL, reader_nfdump_update_or_create);
+    else
+        moloch_session_add_cmd(session, MOLOCH_SES_CMD_FUNC, NULL, NULL, reader_nfdump_save_on_packet_thread);
 }
 
 /******************************************************************************/
@@ -196,13 +204,9 @@ LOCAL gboolean reader_nfdump_read_file() {
         // Check if next file should be triggered
         switch (ret) {
         case NF_CORRUPT:
+            fprintf(stderr, "Skip corrupt data file '%s'\n", GetCurrentFilename());
         case NF_ERROR:
-            if (ret == NF_CORRUPT)
-                fprintf(stderr, "Skip corrupt data file '%s'\n", GetCurrentFilename());
-            else
-                fprintf(stderr, "Read error in file '%s': %s\n", GetCurrentFilename(),
-                        strerror(errno));
-
+            fprintf(stderr, "Read error in file '%s': %s\n", GetCurrentFilename(), strerror(errno));
             // fall through - get next file in chain
         case NF_EOF:
             return reader_nfdump_next(); // re-trigger this function if there is a
@@ -217,8 +221,7 @@ LOCAL gboolean reader_nfdump_read_file() {
         }
 
         if (nffile->block_header->id != DATA_BLOCK_TYPE_2) {
-            fprintf(stderr, "Can't process block type %u. Skip block.\n",
-                    nffile->block_header->id);
+            fprintf(stderr, "Can't process block type %u. Skip block.\n", nffile->block_header->id);
             continue;
         }
 
@@ -235,13 +238,11 @@ LOCAL gboolean reader_nfdump_read_file() {
                 uint32_t map_id = flow_record->ext_map;
                 exporter_t *exp_info = exporter_list[flow_record->exporter_sysid];
                 if (extension_map_list->slot[map_id] == NULL) {
-                    LOGEXIT("Corrupt data file! No such extension map id: %u. Skip record",
-                            flow_record->ext_map);
+                    LOGEXIT("Corrupt data file! No such extension map id: %u. Skip record", flow_record->ext_map);
                 } else {
                     master_record = &(extension_map_list->slot[map_id]->master_record);
                     Engine->nfrecord = (uint64_t *)master_record;
-                    ExpandRecord_v2(flow_record, extension_map_list->slot[flow_record->ext_map],
-                                    exp_info ? &(exp_info->info) : NULL, master_record);
+                    ExpandRecord_v2(flow_record, extension_map_list->slot[flow_record->ext_map], exp_info ? &(exp_info->info) : NULL, master_record);
                     if ((*Engine->FilterEngine)(Engine) != 0) {
                         import_nfdump_record(master_record);
                         extension_map_list->slot[map_id]->ref_count++;

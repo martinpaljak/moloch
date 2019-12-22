@@ -234,6 +234,27 @@ void moloch_session_close(MolochSession_t *session) {
     DLL_PUSH_TAIL(q_, &closingQ[session->thread], session);
 }
 
+// Locates an existing session and upates it
+void moloch_session_update_or_create(MolochSession_t *session) {
+    MolochSession_t *existing;
+    // Update "latest packet" time for thread
+    lastPacketSecs[session->thread] = session->lastPacket.tv_sec;
+
+    // check if we have one existing
+    uint32_t hash = moloch_session_hash(session->sessionId);
+    HASH_FIND_HASH(h_, sessions[session->thread][session->ses], hash, session->sessionId, existing);
+    if (existing) {
+        if (!existing->closingQ) {
+            DLL_MOVE_TAIL(q_, &sessionsQ[session->thread][session->ses], existing);
+        }
+        // update values
+        existing->packets[1] += session->packets[0];
+        existing->bytes[1] += session->bytes[0];
+    } else {
+        HASH_ADD_HASH(h_, sessions[session->thread][session->ses], hash, session->sessionId, session);
+        DLL_PUSH_TAIL(q_, &sessionsQ[session->thread][session->ses], session);
+    }
+}
 /******************************************************************************/
 LOCAL void moloch_session_free (MolochSession_t *session)
 {
