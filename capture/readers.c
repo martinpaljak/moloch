@@ -17,6 +17,7 @@
  */
 
 #include "moloch.h"
+#include "molochconfig.h"
 
 extern MolochConfig_t        config;
 
@@ -25,6 +26,9 @@ LOCAL  MolochStringHashStd_t readersHash;
 void reader_libpcapfile_init(char*);
 void reader_libpcap_init(char*);
 void reader_tpacketv3_init(char*);
+#ifdef HAVE_NFDUMP
+void reader_nfdump_init(char*);
+#endif
 void reader_null_init(char*);
 
 MolochReaderStart  moloch_reader_start;
@@ -60,6 +64,9 @@ void moloch_readers_init()
     HASH_INIT(s_, readersHash, moloch_string_hash, moloch_string_cmp);
     moloch_readers_add("libpcap-file", reader_libpcapfile_init);
     moloch_readers_add("libpcap", reader_libpcap_init);
+#ifdef HAVE_NFDUMP
+    moloch_readers_add("nfdump", reader_nfdump_init);
+#endif
     moloch_readers_add("tpacketv3", reader_tpacketv3_init);
     moloch_readers_add("null", reader_null_init);
 

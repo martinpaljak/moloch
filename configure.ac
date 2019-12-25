@@ -337,6 +337,34 @@ AC_SUBST(MAXMINDDB_CFLAGS)
 AC_SUBST(MAXMINDDB_LIBS)
 
 
+dnl Checks for nfdump
+AC_MSG_CHECKING(for nfdump)
+AC_ARG_WITH(nfdump,
+[  --with-nfdump=DIR use nfdump build directory],
+[ case "$withval" in
+  yes|no)
+     AC_MSG_RESULT(no)
+     ;;
+  *)
+  AC_MSG_RESULT($withval)
+    if test -f $withval/bin/nffile.h -a -f $withval/bin/.libs/libnfdump.a; then
+      owd=`pwd`
+      if cd $withval; then
+        withval=`pwd`;
+        cd $owd;
+      fi
+      NFDUMP_CFLAGS="-I$withval/bin -I./nfdump"
+      NFDUMP_LIBS="$withval/bin/.libs/libnfdump.a"
+      AC_DEFINE([HAVE_NFDUMP], [1], [Define to compile nfdump support])
+    else
+      AC_ERROR(nffile.h or libnfdump.a not found in $withval)
+    fi
+    ;;
+esac ], [AC_MSG_RESULT(no)])
+AC_SUBST(NFDUMP_CFLAGS)
+AC_SUBST(NFDUMP_LIBS)
+
+
 dnl Checks for glib2, these are wrong
 AC_MSG_CHECKING(for glib2)
 AC_ARG_WITH(glib2,
